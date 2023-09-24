@@ -63,6 +63,12 @@ class NetworkWidget(QtWidgets.QWidget):
         self.ui.module_dropout_input.valueChanged.connect(lambda x: self.edit_network_args('module_dropout', x))
 
         self.ui.cp_enable.clicked.connect(lambda x: self.edit_network_args('use_conv_cp', x))
+        self.ui.lora_fa_enable.clicked.connect(lambda x: self.edit_args("fa", x))
+
+        self.ui.min_timestep_input.editingFinished.connect(lambda: self.edit_timesteps('min_timestep'))
+        self.ui.max_timestep_input.editingFinished.connect(lambda: self.edit_timesteps('max_timestep'))
+        self.ui.cache_te_outputs_enable.clicked.connect(self.enable_disable_cache_tenc)
+        self.ui.cache_te_to_disk_enable.clicked.connect(self.enable_disable_cache_tenc_to_disk)
 
         self.colap.add_widget(self.widget, "main_widget")
         self.layout().addWidget(self.colap)
@@ -105,6 +111,47 @@ class NetworkWidget(QtWidgets.QWidget):
         else:
             self.edit_network_args('dropout', value)
 
+    @QtCore.Slot(str)
+    def edit_timesteps(self, name: str) -> None:
+        if name == 'min_timestep':
+            self.edit_args('min_timestep', self.ui.min_timestep_input.value())
+            if self.ui.max_timestep_input.value() <= self.ui.min_timestep_input.value():
+                self.ui.max_timestep_input.setValue(self.ui.min_timestep_input.value() + 1)
+                self.edit_args('max_timestep', self.ui.max_timestep_input.value())
+        else:
+            self.edit_args('max_timestep', self.ui.max_timestep_input.value())
+            if self.ui.max_timestep_input.value() <= self.ui.min_timestep_input.value():
+                self.ui.min_timestep_input.setValue(self.ui.max_timestep_input.value() - 1)
+                self.edit_args('min_timestep', self.ui.min_timestep_input.value())
+
+    @QtCore.Slot(bool)
+    def enable_disable_cache_tenc(self, checked: bool):
+        if 'cache_text_encoder_outputs' in self.args:
+            del self.args['cache_text_encoder_outputs']
+        if checked:
+            self.edit_args('cache_text_encoder_outputs', True)
+            self.ui.cache_te_to_disk_enable.setEnabled(True)
+            self.enable_disable_cache_tenc_to_disk(True)
+        else:
+            self.ui.cache_te_to_disk_enable.setEnabled(False)
+            self.enable_disable_cache_tenc_to_disk(False)
+
+    @QtCore.Slot(bool)
+    def enable_disable_cache_tenc_to_disk(self, checked: bool):
+        if 'cache_text_encoder_outputs_to_disk' in self.args:
+            del self.args['cache_text_encoder_outputs_to_disk']
+        if checked:
+            self.edit_args('cache_text_encoder_outputs_to_disk', True)
+
+    @QtCore.Slot(bool)
+    def enable_disable_cache_text_encoder_outputs(self, checked: bool):
+        self.ui.cache_te_outputs_enable.setEnabled(checked)
+        if self.ui.cache_te_outputs_enable.isChecked() and self.ui.cache_te_outputs_enable.isEnabled():
+            self.ui.cache_te_to_disk_enable.setEnabled(True)
+        else:
+            self.ui.cache_te_to_disk_enable.setEnabled(False)
+        self.enable_disable_cache_tenc(self.ui.cache_te_outputs_enable.isChecked() if checked else False)
+
     @QtCore.Slot(str, bool)
     def enable_disable_dropout(self, mode: str, checked: bool):
         if mode == 'network':
@@ -138,15 +185,21 @@ class NetworkWidget(QtWidgets.QWidget):
         self.ui.cp_enable.setEnabled(False)
         if name.lower() == 'lora':
             self.enable_dropouts(lyco=False)
+            self.ui.lora_fa_enable.setEnabled(True)
+            self.edit_args("fa", self.ui.lora_fa_enable.isChecked())
         elif name.lower() in {'locon', 'dylora'}:
             self.enable_dropouts(lyco=False)
             self.ui.conv_dim_input.setEnabled(True)
             self.edit_network_args('conv_dim', self.ui.conv_dim_input.value())
             self.ui.conv_alpha_input.setEnabled(True)
             self.edit_network_args('conv_alpha', self.ui.conv_alpha_input.value())
+            self.ui.lora_fa_enable.setEnabled(True)
+            self.edit_args("fa", self.ui.lora_fa_enable.isChecked())
             if name.lower() == 'dylora':
                 self.ui.dylora_unit_input.setEnabled(True)
                 self.edit_network_args('unit', self.ui.dylora_unit_input.value())
+                self.ui.lora_fa_enable.setEnabled(False)
+                self.edit_args("fa", False)
         elif name.lower() == 'lokr':
             self.disable_dropouts()
             self.ui.conv_dim_input.setEnabled(True)
@@ -157,6 +210,8 @@ class NetworkWidget(QtWidgets.QWidget):
             if self.ui.cp_enable.isChecked():
                 self.edit_network_args('use_conv_cp', True)
             self.edit_network_args('algo', name.lower().split(" (lycoris)")[0])
+            self.ui.lora_fa_enable.setEnabled(False)
+            self.edit_args("fa", False)
         else:
             self.enable_dropouts(lyco=True)
             self.ui.conv_dim_input.setEnabled(True)
@@ -170,6 +225,8 @@ class NetworkWidget(QtWidgets.QWidget):
                 self.ui.dylora_unit_input.setEnabled(True)
                 self.edit_network_args('block_size', self.ui.dylora_unit_input.value())
             self.edit_network_args('algo', name.lower().split(" (lycoris)")[0])
+            self.ui.lora_fa_enable.setEnabled(False)
+            self.edit_args("fa", False)
         self.change_block_weight_enable(name)
 
     def enable_dropouts(self, lyco: bool):
@@ -321,9 +378,11 @@ class NetworkWidget(QtWidgets.QWidget):
     def load_args(self, args: dict) -> None:
         if self.name not in args:
             return
+        sdxl = args['general_args']['args'].get('sdxl', False)
         args = args[self.name]['args']
         self.ui.network_dim_input.setValue(args['network_dim'])
         self.ui.network_alpha_input.setValue(args['network_alpha'])
+        self.ui.lora_fa_enable.setChecked(args.get("fa", False))
         index = 1 if "network_train_unet_only" in args else 2 if "network_train_text_encoder_only" in args else 0
         self.ui.unet_te_both_select.setCurrentIndex(index)
 
@@ -332,15 +391,24 @@ class NetworkWidget(QtWidgets.QWidget):
         self.ui.network_dropout_input.setValue(args.get('network_dropout', 0.1))
         self.enable_disable_dropout('network', checked)
 
+        self.ui.min_timestep_input.setValue(args.get('min_timestep', 0))
+        self.ui.max_timestep_input.setValue(args.get('max_timestep', 1000))
+        self.edit_timesteps('min_timestep')
+        self.edit_timesteps('max_timestep')
+        self.ui.cache_te_outputs_enable.setChecked(args.get('cache_text_encoder_outputs', False))
+        self.ui.cache_te_to_disk_enable.setChecked(args.get('cache_text_encoder_outputs_to_disk', False))
+        self.enable_disable_cache_text_encoder_outputs(sdxl)
+
         if "network_args" in args:
             self.ui.conv_dim_input.setValue(args['network_args'].get("conv_dim", 32))
             self.ui.conv_alpha_input.setValue(args['network_args'].get("conv_alpha", 16))
             self.ui.dylora_unit_input.setValue(args['network_args'].get("unit", 4))
 
-            checked = True if args['network_args'].get('dropout', False) else False
-            self.ui.network_dropout_enable.setChecked(checked)
-            self.ui.network_dropout_input.setValue(args['network_args'].get('dropout', 0.1))
-            self.enable_disable_dropout('network', checked)
+            if 'network_dropout' not in args:
+                checked = True if args['network_args'].get('dropout', False) else False
+                self.ui.network_dropout_enable.setChecked(checked)
+                self.ui.network_dropout_input.setValue(args['network_args'].get('dropout', 0.1))
+                self.enable_disable_dropout('network', checked)
 
             checked = True if args['network_args'].get('rank_dropout', False) else False
             self.ui.rank_dropout_enable.setChecked(checked)
